@@ -1,16 +1,21 @@
-# Используем официальный образ Python
+# Dockerfile
+
 FROM python:3.12-slim
 
-# Устанавливаем рабочую директорию на уровень выше, чем папка с кодом
 WORKDIR /bot
 
-# Копируем файл с зависимостями
-COPY requirements.txt .
+# Создаем пользователя и группу 'app'
+RUN groupadd -r app && useradd -r -g app app
 
-# Устанавливаем зависимости
+COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Копируем папку app целиком в контейнер
 COPY ./app ./app
+
+# Меняем владельца директории
+RUN chown -R app:app /bot
+
+# Переключаемся на пользователя 'app'
+USER app
 
 CMD ["python", "-m", "app.bot"]

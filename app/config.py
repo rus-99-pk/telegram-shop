@@ -4,11 +4,13 @@ from pydantic import SecretStr
 class Settings(BaseSettings):
     bot_token: SecretStr
     admin_ids: list[int]
+    developer_id: int
+    support_username: str
+    bank_card_number: str
 
     model_config = SettingsConfigDict(
         env_file='../.env',
-        env_file_encoding='utf-8',
-        # env_separator=','
+        env_file_encoding='utf-8'
     )
 
 config = Settings()
