@@ -53,7 +53,7 @@ async def cmd_start(message: Message, session: AsyncSession, bot: Bot):
     сообщение с инлайн-клавиатурой главного меню.
     """
     await message.answer(
-        "Добро пожаловать!",
+        "👋 Добро пожаловать в бот-магазин!",
         reply_markup=main_menu_reply_keyboard()
     )
     await show_main_menu(bot, message.chat.id, message.from_user.id, message.from_user.username, session)
@@ -314,7 +314,6 @@ async def process_receipt(message: Message, state: FSMContext, session: AsyncSes
 
     await message.answer(LEXICON['receipt_received'])
 
-    # --- ИЗМЕНЕНИЯ ЗДЕСЬ ---
     for admin_id in config.admin_ids:
         try:
             await bot.send_message(
@@ -324,7 +323,6 @@ async def process_receipt(message: Message, state: FSMContext, session: AsyncSes
                     username=message.from_user.username or 'N/A',
                     user_id=message.from_user.id
                 ),
-                # Добавляем клавиатуру с кнопкой для перехода к списку заказов
                 reply_markup=kb.admin_receipt_notification_keyboard()
             )
         except Exception as e:
@@ -417,6 +415,5 @@ async def confirm_order_receipt(callback: CallbackQuery, callback_data: ConfirmR
     except TelegramBadRequest:
         pass
 
-    # Вызываем функцию для обновления списка заказов
     await my_orders(callback, session)
     await callback.answer()

@@ -1,7 +1,8 @@
 import asyncio
 import logging
+from datetime import datetime
 from aiogram import Router, F, Bot
-from aiogram.types import Message, CallbackQuery
+from aiogram.types import Message, CallbackQuery, BufferedInputFile
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.context import FSMContext
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -12,9 +13,10 @@ from app.lexicon.lexicon_ru import LEXICON, ORDER_STATUSES
 from app.keyboards import builders as kb
 from app.keyboards.builders import (
     ViewOrder, ChangeStatus, ManageProduct, EditProduct,
-    DeleteProduct, CancelFSM, ViewReceipt
+    DeleteProduct, CancelFSM, ViewReceipt, PromptStatus  # <-- ДОБАВЛЕН ИМПОРТ
 )
 from app.database import requests as rq
+from app.services.report_generator import create_orders_excel_report
 
 router = Router()
 router.message.filter(F.from_user.id.in_(config.admin_ids))
@@ -45,11 +47,17 @@ class Mailing(StatesGroup):
     waiting_for_text = State()
 
 
-# <--- НОВАЯ СЕРВИСНАЯ ФУНКЦИЯ ДЛЯ ОТПРАВКИ ДЕТАЛЕЙ ЗАКАЗА --->
+# <--- СЕРВИСНАЯ ФУНКЦИЯ ДЛЯ ОТПРАВКИ ДЕТАЛЕЙ ЗАКАЗА --->
 async def send_order_details(message: Message, bot: Bot, session: AsyncSession, order_id: int):
     """
     Получает детали заказа и отправляет их в виде нового сообщения.
+    УДАЛЯЕТ предыдущее сообщение, чтобы избежать дублирования.
     """
+    try:
+        await message.delete()
+    except TelegramBadRequest:
+        pass  # Не страшно, если не удалось удалить
+
     order_info, order_items = await rq.get_order_details(session, order_id)
 
     if not order_info:
@@ -205,13 +213,9 @@ async def list_orders(callback: CallbackQuery | Message, session: AsyncSession):
 @router.callback_query(ViewOrder.filter())
 async def view_order_detail(callback: CallbackQuery, callback_data: ViewOrder, session: AsyncSession, bot: Bot):
     """
-    Обрабатывает нажатие на кнопку заказа из списка. Удаляет список и отправляет детали.
+    Обрабатывает нажатие на кнопку заказа из списка ИЛИ кнопку "назад к деталям".
+    Удаляет текущее сообщение и отправляет детали заново.
     """
-    try:
-        await callback.message.delete()
-    except TelegramBadRequest:
-        pass  # Не страшно, если не удалось удалить
-
     await send_order_details(callback.message, bot, session, callback_data.order_id)
     await callback.answer()
 
@@ -232,6 +236,23 @@ async def view_receipt_handler(callback: CallbackQuery, callback_data: ViewRecei
         await callback.answer("Чек для этого заказа не найден.", show_alert=True)
     await callback.answer()
 
+
+# <-- НОВЫЙ ХЭНДЛЕР ДЛЯ ОТОБРАЖЕНИЯ КНОПОК СТАТУСОВ -->
+@router.callback_query(PromptStatus.filter())
+async def prompt_change_status(callback: CallbackQuery, callback_data: PromptStatus):
+    """
+    Обрабатывает нажатие кнопки 'Изменить статус' и показывает клавиатуру со статусами.
+    """
+    order_id = callback_data.order_id
+    try:
+        await callback.message.edit_text(
+            text=LEXICON['admin_choose_new_status'].format(order_id=order_id),
+            reply_markup=kb.change_status_keyboard(order_id)
+        )
+    except TelegramBadRequest:
+        pass
+    await callback.answer()
+# ----------------------------------------------------
 
 @router.callback_query(ChangeStatus.filter(F.action == 'prompt_reason'))
 async def prompt_cancellation_reason(callback: CallbackQuery, callback_data: ChangeStatus, state: FSMContext):
@@ -286,7 +307,9 @@ async def change_order_status(callback: CallbackQuery, callback_data: ChangeStat
         logging.error(f"Не удалось отправить уведомление пользователю {order_info.tg_id}: {e}")
 
     await callback.answer(LEXICON['admin_status_updated'])
-    await view_order_detail(callback, ViewOrder(order_id=order_id), session)
+    
+    # Возвращаемся к деталям заказа
+    await send_order_details(callback.message, bot, session, order_id)
 
 
 @router.message(CancelOrder.waiting_for_reason, F.text)
@@ -346,6 +369,46 @@ async def process_cdek_track_number(message: Message, state: FSMContext, session
         
         await send_order_details(message, bot, session, order_id)
 
+
+@router.callback_query(F.data == 'admin_report')
+async def download_report(callback: CallbackQuery, session: AsyncSession, bot: Bot):
+    try:
+        await callback.message.edit_text(LEXICON['generating_report'])
+    except TelegramBadRequest:
+        await callback.answer(LEXICON['generating_report'])
+
+    orders_with_users = await rq.get_all_orders_with_user_info(session)
+    
+    if not orders_with_users:
+        await callback.message.edit_text(
+            LEXICON['report_no_orders'],
+            reply_markup=kb.admin_panel_keyboard()
+        )
+        await callback.answer()
+        return
+
+    all_items = await rq.get_all_order_items(session)
+    
+    report_file_bytes = create_orders_excel_report(orders_with_users, all_items)
+    
+    filename = f"orders_report_{datetime.now().strftime('%Y-%m-%d_%H-%M')}.xlsx"
+    file_to_send = BufferedInputFile(report_file_bytes.getvalue(), filename=filename)
+
+    await bot.send_document(
+        chat_id=callback.from_user.id,
+        document=file_to_send,
+        caption=LEXICON['report_ready']
+    )
+    
+    try:
+        await callback.message.edit_text(
+            LEXICON['admin_start_message'],
+            reply_markup=kb.admin_panel_keyboard()
+        )
+    except TelegramBadRequest:
+        pass
+    
+    await callback.answer()
 
 @router.callback_query(F.data == 'admin_manage_products')
 async def manage_products(callback: CallbackQuery, session: AsyncSession):

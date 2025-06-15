@@ -10,6 +10,11 @@ from app.config import config
 class ViewOrder(CallbackData, prefix="view_order"):
     order_id: int
 
+# <-- НОВАЯ CALLBACKDATA -->
+class PromptStatus(CallbackData, prefix="prompt_status"):
+    order_id: int
+# -------------------------
+
 class ChangeStatus(CallbackData, prefix="change_status"):
     order_id: int
     new_status: str
@@ -69,7 +74,10 @@ def admin_panel_keyboard():
     builder.row(InlineKeyboardButton(text=LEXICON['add_item_button'], callback_data='admin_add_product'))
     builder.row(InlineKeyboardButton(text=LEXICON['manage_products_button'], callback_data='admin_manage_products'))
     builder.row(InlineKeyboardButton(text=LEXICON['list_orders_button'], callback_data='admin_list_orders'))
-    builder.row(InlineKeyboardButton(text=LEXICON['statistics_button'], callback_data='admin_stats'))
+    builder.row(
+        InlineKeyboardButton(text=LEXICON['statistics_button'], callback_data='admin_stats'),
+        InlineKeyboardButton(text=LEXICON['report_button'], callback_data='admin_report')
+    )
     builder.row(InlineKeyboardButton(text=LEXICON['mailing_button'], callback_data='admin_mailing'))
     builder.row(InlineKeyboardButton(text=LEXICON['back_to_main_menu'], callback_data='to_main_menu'))
     return builder.as_markup()
@@ -226,30 +234,48 @@ def manage_order_keyboard(order_id: int, has_receipt: bool, status: str, track_n
             url=f"https://www.cdek.ru/ru/tracking/?order_id={track_number}"
         ))
 
+    # <-- ИЗМЕНЕНИЕ: Отдельная кнопка для смены статуса -->
     if status not in ['completed', 'canceled']:
         builder.row(
             InlineKeyboardButton(
-                text=LEXICON['status_processing_button'],
-                callback_data=ChangeStatus(order_id=order_id, new_status='processing').pack()
-            ),
-            InlineKeyboardButton(
-                text=LEXICON['status_shipped_button'],
-                callback_data=ChangeStatus(order_id=order_id, new_status='shipped', action='prompt_track_number').pack()
+                text=LEXICON['change_status_button'],
+                callback_data=PromptStatus(order_id=order_id).pack()
             )
         )
-        builder.row(
-            InlineKeyboardButton(
-                text=LEXICON['status_completed_button'],
-                callback_data=ChangeStatus(order_id=order_id, new_status='completed').pack()
-            ),
-            InlineKeyboardButton(
-                text=LEXICON['status_canceled_button'],
-                callback_data=ChangeStatus(order_id=order_id, new_status='canceled', action='prompt_reason').pack()
-            )
-        )
+    # ---------------------------------------------------
     
     builder.row(InlineKeyboardButton(text=LEXICON['back_to_orders_button'], callback_data='admin_list_orders'))
     return builder.as_markup()
+
+# <-- НОВАЯ КЛАВИАТУРА ДЛЯ ВЫБОРА СТАТУСА -->
+def change_status_keyboard(order_id: int):
+    builder = InlineKeyboardBuilder()
+    builder.row(
+        InlineKeyboardButton(
+            text=LEXICON['status_processing_button'],
+            callback_data=ChangeStatus(order_id=order_id, new_status='processing').pack()
+        ),
+        InlineKeyboardButton(
+            text=LEXICON['status_shipped_button'],
+            callback_data=ChangeStatus(order_id=order_id, new_status='shipped', action='prompt_track_number').pack()
+        )
+    )
+    builder.row(
+        InlineKeyboardButton(
+            text=LEXICON['status_completed_button'],
+            callback_data=ChangeStatus(order_id=order_id, new_status='completed').pack()
+        ),
+        InlineKeyboardButton(
+            text=LEXICON['status_canceled_button'],
+            callback_data=ChangeStatus(order_id=order_id, new_status='canceled', action='prompt_reason').pack()
+        )
+    )
+    builder.row(InlineKeyboardButton(
+        text=LEXICON['back_to_order_details_button'],
+        callback_data=ViewOrder(order_id=order_id).pack()
+    ))
+    return builder.as_markup()
+# ----------------------------------------------
 
 def manage_products_keyboard(products: list[Product]):
     builder = InlineKeyboardBuilder()

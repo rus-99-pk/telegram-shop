@@ -131,13 +131,27 @@ async def attach_receipt_to_order(session: AsyncSession, order_id: int, file_id:
     await session.execute(query)
     await session.commit()
 
-# --- НОВАЯ ФУНКЦИЯ ---
+
 async def set_cdek_track_number(session: AsyncSession, order_id: int, track_number: str):
     """Устанавливает трек-номер для заказа."""
     query = update(Order).where(Order.id == order_id).values(cdek_track_number=track_number)
     await session.execute(query)
     await session.commit()
-# ---------------------
+
+# --- НОВЫЕ ФУНКЦИИ ДЛЯ ОТЧЕТА ---
+async def get_all_orders_with_user_info(session: AsyncSession):
+    """Получает все заказы с информацией о пользователе для отчета."""
+    query = select(Order, User).join(User, Order.user_id == User.id).order_by(Order.id.asc())
+    result = await session.execute(query)
+    return result.all()
+
+
+async def get_all_order_items(session: AsyncSession):
+    """Получает все заказанные товары."""
+    query = select(OrderItem)
+    result = await session.scalars(query)
+    return result.all()
+# ----------------------------------
 
 async def add_product(session: AsyncSession, name: str, price: float, photo_id: str, description: str | None):
     product = Product(name=name, price=price, photo_id=photo_id, description=description)

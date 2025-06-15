@@ -1,4 +1,3 @@
-# Файл: app/services/notifications.py
 import logging
 from aiogram import Bot
 from app.config import config

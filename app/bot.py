@@ -11,11 +11,9 @@ from app.config import config
 from app.database.models import Base
 from app.handlers import user, admin
 
-# Настройка логирования
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(name)s - %(message)s')
 
 async def main():
-    # Создание движка и сессии для работы с БД
     engine = create_async_engine('sqlite+aiosqlite:///database.db', echo=True)
     session_maker = async_sessionmaker(engine, expire_on_commit=False)
 
@@ -23,27 +21,20 @@ async def main():
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
 
-    # Инициализация бота и диспетчера
-    # bot = Bot(token=config.bot_token.get_secret_value(), parse_mode='HTML') # <-- СТАРАЯ СТРОКА
     bot = Bot(
         token=config.bot_token.get_secret_value(),
-        default=DefaultBotProperties(parse_mode='HTML') # <-- 2. НОВАЯ, ПРАВИЛЬНАЯ СТРОКА
+        default=DefaultBotProperties(parse_mode='HTML')
     )
     dp = Dispatcher()
 
-    # Передача сессии в хэндлеры через middleware
     dp.update.middleware(DbSessionMiddleware(session_pool=session_maker))
     
-    # Регистрация роутеров
     dp.include_router(user.router)
     dp.include_router(admin.router)
 
-    # Запуск бота
     await bot.delete_webhook(drop_pending_updates=True)
     await dp.start_polling(bot)
 
-
-# Middleware для передачи сессии в хэндлеры
 class DbSessionMiddleware(BaseMiddleware):
     def __init__(self, session_pool: async_sessionmaker):
         self.session_pool = session_pool

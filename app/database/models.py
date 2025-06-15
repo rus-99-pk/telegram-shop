@@ -40,7 +40,7 @@ class Order(Base):
     recipient_full_name: Mapped[str] = mapped_column(String(150), nullable=True)
     recipient_phone_number: Mapped[str] = mapped_column(String(20), nullable=True)
     receipt_file_id: Mapped[str] = mapped_column(String, nullable=True)
-    cdek_track_number: Mapped[str] = mapped_column(String, nullable=True) # <-- ДОБАВЛЕНО ПОЛЕ
+    cdek_track_number: Mapped[str] = mapped_column(String, nullable=True)
 
 
 class OrderItem(Base):
