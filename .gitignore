@@ -1,2 +1,18 @@
+# Git
+.git
+.gitignore
+
+# IDE и виртуальное окружение
+.idea/
+.vscode/
+__pycache__/
+*.pyc
+venv/
+*.pyc
+*.pyo
+*.pyd
+
+# Локальные артефакты
 .env
 database.db
+*.db-journal

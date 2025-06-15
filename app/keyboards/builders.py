@@ -7,69 +7,89 @@ from app.database.models import Product
 from app.config import config
 
 
+# --- Фабрики Callback-данных (CallbackData) ---
+# Используются для создания структурированных callback-ов для кнопок
+
+# Для просмотра деталей заказа админом
 class ViewOrder(CallbackData, prefix="view_order"):
     order_id: int
 
-# <-- НОВАЯ CALLBACKDATA -->
+# Для запроса на смену статуса заказа (показывает клавиатуру со статусами)
 class PromptStatus(CallbackData, prefix="prompt_status"):
     order_id: int
-# -------------------------
 
+# Для смены статуса заказа
 class ChangeStatus(CallbackData, prefix="change_status"):
     order_id: int
     new_status: str
-    action: str | None = None
+    action: str | None = None  # Дополнительное действие (например, запросить трек-номер)
 
+# Для просмотра деталей товара
 class ViewProduct(CallbackData, prefix="view_prod"):
     product_id: int
 
+# Для навигации по страницам каталога
 class CatalogPage(CallbackData, prefix="catalog_page"):
     page: int
 
+# Для добавления товара в корзину
 class AddToCart(CallbackData, prefix="add_cart"):
     product_id: int
 
+# Для отмены процесса оформления заказа
 class CancelCheckout(CallbackData, prefix="cancel_checkout"):
-    order_id: int | None = None
+    order_id: int | None = None  # ID заказа, если он уже был создан
 
+# Для отмены любого FSM-состояния (например, добавления товара админом)
 class CancelFSM(CallbackData, prefix="cancel_fsm"):
     pass
 
+# Для просмотра чека админом
 class ViewReceipt(CallbackData, prefix="view_receipt"):
     order_id: int
 
+# Для просмотра деталей заказа пользователем
 class UserViewOrder(CallbackData, prefix="user_view_order"):
     order_id: int
 
+# Для подтверждения получения заказа пользователем
 class ConfirmReceipt(CallbackData, prefix="confirm_receipt"):
     order_id: int
 
+# Для управления конкретным товаром (админка)
 class ManageProduct(CallbackData, prefix="mng_prod"):
     product_id: int
 
+# Для редактирования товара (админка)
 class EditProduct(CallbackData, prefix="edit_prod"):
     product_id: int
-    action: str
+    action: str  # Какое поле редактируем ('price', 'name', 'description')
 
+# Для удаления товара (админка)
 class DeleteProduct(CallbackData, prefix="del_prod"):
     product_id: int
-    confirm: bool
+    confirm: bool  # Флаг подтверждения удаления
 
+
+# --- Функции для сборки клавиатур (Keyboard Builders) ---
 
 def main_menu_keyboard(is_admin: bool = False):
+    """Создает клавиатуру главного меню."""
     builder = InlineKeyboardBuilder()
     builder.row(InlineKeyboardButton(text=LEXICON['catalog_button'], callback_data='catalog'))
     builder.row(InlineKeyboardButton(text=LEXICON['cart_button'], callback_data='my_cart'))
     builder.row(InlineKeyboardButton(text=LEXICON['orders_button'], callback_data='my_orders'))
     builder.row(InlineKeyboardButton(
         text=LEXICON['feedback_button'],
-        url=f't.me/{config.support_username}'
+        url=f't.me/{config.support_username}'  # Кнопка-ссылка
     ))
     if is_admin:
+        # Добавляем кнопку админ-панели, если пользователь является админом
         builder.row(InlineKeyboardButton(text=LEXICON['admin_panel_button'], callback_data='admin_panel'))
     return builder.as_markup()
 
 def admin_panel_keyboard():
+    """Создает клавиатуру админ-панели."""
     builder = InlineKeyboardBuilder()
     builder.row(InlineKeyboardButton(text=LEXICON['add_item_button'], callback_data='admin_add_product'))
     builder.row(InlineKeyboardButton(text=LEXICON['manage_products_button'], callback_data='admin_manage_products'))
@@ -83,6 +103,7 @@ def admin_panel_keyboard():
     return builder.as_markup()
 
 def cancel_fsm_keyboard():
+    """Создает клавиатуру с одной кнопкой "Отмена" для прерывания FSM-состояний."""
     builder = InlineKeyboardBuilder()
     builder.row(InlineKeyboardButton(
         text=LEXICON['cancel_action_button'],
@@ -91,13 +112,16 @@ def cancel_fsm_keyboard():
     return builder.as_markup()
 
 def catalog_keyboard(products: list[Product], page: int, total_pages: int):
+    """Создает клавиатуру для каталога с товарами и кнопками навигации."""
     builder = InlineKeyboardBuilder()
+    # Добавляем кнопки для каждого товара
     for product in products:
         builder.row(InlineKeyboardButton(
             text=f'{product.name} - {int(product.price)} руб.',
             callback_data=ViewProduct(product_id=product.id).pack()
         ))
     
+    # Добавляем кнопки навигации "Вперед" / "Назад"
     nav_buttons = []
     if page > 1:
         nav_buttons.append(InlineKeyboardButton(
@@ -111,17 +135,19 @@ def catalog_keyboard(products: list[Product], page: int, total_pages: int):
         ))
     
     if nav_buttons:
-        builder.row(*nav_buttons)
+        builder.row(*nav_buttons)  # Добавляем кнопки навигации в один ряд
 
     builder.row(InlineKeyboardButton(text=LEXICON['back_to_main_menu'], callback_data='to_main_menu'))
     return builder.as_markup()
 
 def product_detail_keyboard(product_id: int, back_callback: str = 'catalog'):
+    """Создает клавиатуру для страницы с деталями товара."""
     builder = InlineKeyboardBuilder()
     builder.row(InlineKeyboardButton(
         text='➕ Добавить в корзину',
         callback_data=AddToCart(product_id=product_id).pack()
     ))
+    # Логика для кнопки "Назад", чтобы вернуться на правильную страницу каталога
     if back_callback == 'catalog_page_1':
         builder.row(InlineKeyboardButton(text=LEXICON['back_button'], callback_data=CatalogPage(page=1).pack()))
     else:
@@ -129,6 +155,7 @@ def product_detail_keyboard(product_id: int, back_callback: str = 'catalog'):
     return builder.as_markup()
 
 def product_added_to_cart_keyboard(product_id: int, back_callback: str = 'catalog'):
+    """Клавиатура, которая показывается после добавления товара в корзину."""
     builder = InlineKeyboardBuilder()
     builder.row(InlineKeyboardButton(
         text='➕ Добавить еще',
@@ -145,19 +172,22 @@ def product_added_to_cart_keyboard(product_id: int, back_callback: str = 'catalo
     return builder.as_markup()
 
 def cart_keyboard(items: list):
+    """Создает клавиатуру для корзины."""
     builder = InlineKeyboardBuilder()
-    if items:
+    if items: # Если корзина не пуста
         builder.row(InlineKeyboardButton(text=LEXICON['checkout_button'], callback_data='checkout'))
         builder.row(InlineKeyboardButton(text=LEXICON['clear_cart_button'], callback_data='clear_cart'))
     builder.row(InlineKeyboardButton(text=LEXICON['back_to_main_menu'], callback_data='to_main_menu'))
     return builder.as_markup()
 
 def back_to_main_menu_keyboard():
+    """Создает клавиатуру с одной кнопкой "Назад в главное меню"."""
     builder = InlineKeyboardBuilder()
     builder.row(InlineKeyboardButton(text=LEXICON['back_to_main_menu'], callback_data='to_main_menu'))
     return builder.as_markup()
 
 def cancel_checkout_keyboard(order_id: int | None = None):
+    """Создает клавиатуру для отмены оформления заказа."""
     builder = InlineKeyboardBuilder()
     builder.row(InlineKeyboardButton(
         text=LEXICON['cancel_checkout_button'],
@@ -166,10 +196,11 @@ def cancel_checkout_keyboard(order_id: int | None = None):
     return builder.as_markup()
 
 def pickup_point_keyboard():
+    """Клавиатура для шага ввода пункта выдачи СДЭК."""
     builder = InlineKeyboardBuilder()
     builder.row(InlineKeyboardButton(
         text=LEXICON['checkout_cdek_offices_button'],
-        url="https://www.cdek.ru/ru/offices"
+        url="https://www.cdek.ru/ru/offices"  # Кнопка-ссылка на карту офисов СДЭК
     ))
     builder.row(InlineKeyboardButton(
         text=LEXICON['cancel_checkout_button'],
@@ -178,9 +209,10 @@ def pickup_point_keyboard():
     return builder.as_markup()
 
 def user_orders_keyboard(orders: list):
+    """Создает клавиатуру со списком заказов пользователя."""
     builder = InlineKeyboardBuilder()
     for order in orders:
-        status_text = ORDER_STATUSES.get(order.status, order.status)
+        status_text = ORDER_STATUSES.get(order.status, order.status) # Получаем текстовое представление статуса
         builder.row(InlineKeyboardButton(
             text=f'Заказ #{order.id} (Статус: {status_text})',
             callback_data=UserViewOrder(order_id=order.id).pack()
@@ -189,13 +221,16 @@ def user_orders_keyboard(orders: list):
     return builder.as_markup()
 
 def user_order_detail_keyboard(order_id: int, status: str, track_number: str | None):
+    """Клавиатура для страницы с деталями заказа пользователя."""
     builder = InlineKeyboardBuilder()
     if track_number:
+        # Если есть трек-номер, добавляем кнопку для отслеживания
         builder.row(InlineKeyboardButton(
             text=LEXICON['track_order_button'],
             url=f"https://www.cdek.ru/ru/tracking/?order_id={track_number}"
         ))
     if status == 'shipped':
+        # Если заказ отправлен, добавляем кнопку подтверждения получения
         builder.row(InlineKeyboardButton(
             text=LEXICON['confirm_receipt_button'],
             callback_data=ConfirmReceipt(order_id=order_id).pack()
@@ -207,6 +242,7 @@ def user_order_detail_keyboard(order_id: int, status: str, track_number: str | N
     return builder.as_markup()
 
 def admin_list_orders_keyboard(orders: list):
+    """Создает клавиатуру со списком всех заказов для админа."""
     builder = InlineKeyboardBuilder()
     for order in orders:
         status_text = ORDER_STATUSES.get(order.status, order.status)
@@ -218,9 +254,11 @@ def admin_list_orders_keyboard(orders: list):
     return builder.as_markup()
 
 def manage_order_keyboard(order_id: int, has_receipt: bool, status: str, track_number: str | None):
+    """Клавиатура для управления конкретным заказом в админ-панели."""
     builder = InlineKeyboardBuilder()
 
     if has_receipt:
+        # Кнопка для просмотра прикрепленного чека
         builder.row(
             InlineKeyboardButton(
                 text=LEXICON['view_receipt_button'],
@@ -229,12 +267,13 @@ def manage_order_keyboard(order_id: int, has_receipt: bool, status: str, track_n
         )
     
     if track_number:
+        # Кнопка для отслеживания заказа на сайте СДЭК
         builder.row(InlineKeyboardButton(
             text=LEXICON['track_order_button'],
             url=f"https://www.cdek.ru/ru/tracking/?order_id={track_number}"
         ))
 
-    # <-- ИЗМЕНЕНИЕ: Отдельная кнопка для смены статуса -->
+    # Кнопка для смены статуса, если заказ еще не завершен или не отменен
     if status not in ['completed', 'canceled']:
         builder.row(
             InlineKeyboardButton(
@@ -242,13 +281,12 @@ def manage_order_keyboard(order_id: int, has_receipt: bool, status: str, track_n
                 callback_data=PromptStatus(order_id=order_id).pack()
             )
         )
-    # ---------------------------------------------------
     
     builder.row(InlineKeyboardButton(text=LEXICON['back_to_orders_button'], callback_data='admin_list_orders'))
     return builder.as_markup()
 
-# <-- НОВАЯ КЛАВИАТУРА ДЛЯ ВЫБОРА СТАТУСА -->
 def change_status_keyboard(order_id: int):
+    """Клавиатура для выбора нового статуса заказа админом."""
     builder = InlineKeyboardBuilder()
     builder.row(
         InlineKeyboardButton(
@@ -257,6 +295,7 @@ def change_status_keyboard(order_id: int):
         ),
         InlineKeyboardButton(
             text=LEXICON['status_shipped_button'],
+            # При смене на "Отправлен" требуется доп. действие - запросить трек-номер
             callback_data=ChangeStatus(order_id=order_id, new_status='shipped', action='prompt_track_number').pack()
         )
     )
@@ -267,6 +306,7 @@ def change_status_keyboard(order_id: int):
         ),
         InlineKeyboardButton(
             text=LEXICON['status_canceled_button'],
+            # При смене на "Отменен" требуется доп. действие - запросить причину
             callback_data=ChangeStatus(order_id=order_id, new_status='canceled', action='prompt_reason').pack()
         )
     )
@@ -275,9 +315,9 @@ def change_status_keyboard(order_id: int):
         callback_data=ViewOrder(order_id=order_id).pack()
     ))
     return builder.as_markup()
-# ----------------------------------------------
 
 def manage_products_keyboard(products: list[Product]):
+    """Создает клавиатуру со списком товаров для управления в админ-панели."""
     builder = InlineKeyboardBuilder()
     for product in products:
         builder.row(InlineKeyboardButton(
@@ -288,6 +328,7 @@ def manage_products_keyboard(products: list[Product]):
     return builder.as_markup()
 
 def product_edit_actions_keyboard(product_id: int):
+    """Клавиатура для выбора поля товара, которое нужно отредактировать."""
     builder = InlineKeyboardBuilder()
     builder.row(
         InlineKeyboardButton(
@@ -309,6 +350,7 @@ def product_edit_actions_keyboard(product_id: int):
     return builder.as_markup()
 
 def product_management_keyboard(product_id: int):
+    """Клавиатура с действиями над конкретным товаром: редактировать или удалить."""
     builder = InlineKeyboardBuilder()
     builder.row(
         InlineKeyboardButton(
@@ -324,6 +366,7 @@ def product_management_keyboard(product_id: int):
     return builder.as_markup()
 
 def confirm_delete_keyboard(product_id: int):
+    """Клавиатура для подтверждения удаления товара."""
     builder = InlineKeyboardBuilder()
     builder.row(
         InlineKeyboardButton(
@@ -338,6 +381,7 @@ def confirm_delete_keyboard(product_id: int):
     return builder.as_markup()
 
 def cancel_keyboard(back_to: str):
+    """Универсальная клавиатура отмены с возвратом на указанный 'back_to' callback."""
     builder = InlineKeyboardBuilder()
     builder.row(InlineKeyboardButton(text=LEXICON['cancel_mailing_button'], callback_data=back_to))
     return builder.as_markup()

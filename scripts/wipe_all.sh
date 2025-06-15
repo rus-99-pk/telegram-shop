@@ -2,7 +2,7 @@
 echo "!!! ВНИМАНИЕ: СЕЙЧАС БУДУТ УДАЛЕНЫ ВСЕ ДАННЫЕ !!!"
 
 echo "Останавливаю и удаляю контейнеры..."
-docker-compose down
+docker compose down
 
 # Явное удаление файла базы данных!
 if [ -f ./database.db ]; then

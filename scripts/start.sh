@@ -1,2 +1,1 @@
-touch database.db
-docker-compose up --build $1
+docker compose up --build $1

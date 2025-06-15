@@ -3,7 +3,40 @@ services:
     build: .
     container_name: telegram_shop_bot
     restart: always
-    env_file:
-      - .env
+
+    # --- Безопасность ---
+    # 1. Запускаем контейнер с файловой системой только для чтения
+    read_only: true
+    # 2. Создаем временные файловые системы в памяти для тех мест, куда нужно писать
+    tmpfs:
+      - /tmp
+
+    # --- Управление данными ---
     volumes:
-      - ./database.db:/bot/database.db
+      # 1. Используем именованный том для хранения базы данных.
+      - db_data:/bot/db
+    
+    # --- Управление секретами ---
+    # Вместо env_file используем Docker Secrets.
+    # Файл .env будет смонтирован как секрет внутрь контейнера.
+    secrets:
+      - app_config_secret
+
+    # --- Ограничение ресурсов (рекомендуется) ---
+    deploy:
+      resources:
+        limits:
+          cpus: '0.75'  # Не более 75% одного ядра CPU
+          memory: '512M' # Не более 512MB RAM
+        reservations:
+          cpus: '0.25'
+          memory: '128M'
+
+# Определяем секреты и тома
+secrets:
+  app_config_secret:
+    file: ./.env
+
+volumes:
+  db_data:
+    driver: local

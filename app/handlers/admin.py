@@ -13,61 +13,74 @@ from app.lexicon.lexicon_ru import LEXICON, ORDER_STATUSES
 from app.keyboards import builders as kb
 from app.keyboards.builders import (
     ViewOrder, ChangeStatus, ManageProduct, EditProduct,
-    DeleteProduct, CancelFSM, ViewReceipt, PromptStatus  # <-- ДОБАВЛЕН ИМПОРТ
+    DeleteProduct, CancelFSM, ViewReceipt, PromptStatus
 )
 from app.database import requests as rq
 from app.services.report_generator import create_orders_excel_report
 
+# Создаем роутер для админских обработчиков
 router = Router()
+# Применяем фильтр ко всем хэндлерам в этом роутере:
+# они будут срабатывать только если ID пользователя есть в списке админов
 router.message.filter(F.from_user.id.in_(config.admin_ids))
 router.callback_query.filter(F.from_user.id.in_(config.admin_ids))
 
 
+# --- Конечные автоматы (FSM) для админских действий ---
+
+# Состояния для добавления нового товара
 class AddProduct(StatesGroup):
     name = State()
     price = State()
     photo = State()
     description = State()
 
+# Состояния для отмены заказа с указанием причины
 class CancelOrder(StatesGroup):
     waiting_for_reason = State()
-    order_id = State()
+    order_id = State() # Храним ID заказа в состоянии
 
+# Состояния для отправки заказа с указанием трек-номера
 class ShipOrder(StatesGroup):
     waiting_for_track_number = State()
-    order_id = State()
+    order_id = State() # Храним ID заказа в состоянии
 
+# Состояния для редактирования товара
 class EditProductState(StatesGroup):
     waiting_for_new_price = State()
     waiting_for_new_name = State()
     waiting_for_new_description = State()
-    product_id = State()
+    product_id = State() # Храним ID товара в состоянии
 
+# Состояние для создания рассылки
 class Mailing(StatesGroup):
     waiting_for_text = State()
 
 
-# <--- СЕРВИСНАЯ ФУНКЦИЯ ДЛЯ ОТПРАВКИ ДЕТАЛЕЙ ЗАКАЗА --->
+# --- Сервисная функция для отправки деталей заказа ---
 async def send_order_details(message: Message, bot: Bot, session: AsyncSession, order_id: int):
     """
     Получает детали заказа и отправляет их в виде нового сообщения.
-    УДАЛЯЕТ предыдущее сообщение, чтобы избежать дублирования.
+    Удаляет предыдущее сообщение, чтобы избежать дублирования и "грязного" интерфейса.
     """
     try:
-        await message.delete()
+        await message.delete()  # Пытаемся удалить старое сообщение (например, список заказов)
     except TelegramBadRequest:
-        pass  # Не страшно, если не удалось удалить
+        pass  # Ничего страшного, если не удалось
 
+    # Получаем всю информацию по заказу из БД
     order_info, order_items = await rq.get_order_details(session, order_id)
 
     if not order_info:
         await message.answer("Заказ не найден!")
         return
 
+    # Формируем список товаров в заказе
     products_text = "\n".join([f"  - {item.product_name} ({int(item.product_price)} руб.)" for item in order_items])
     total_price = sum(item.product_price for item in order_items)
     products_text += f"\n\n<b>Итого: {int(total_price)} руб.</b>"
 
+    # Формируем основной текст сообщения
     text = LEXICON['admin_order_details'].format(
         order_id=order_id,
         username=order_info.username or "N/A",
@@ -79,6 +92,7 @@ async def send_order_details(message: Message, bot: Bot, session: AsyncSession, 
         products=products_text
     )
 
+    # Создаем клавиатуру для управления заказом
     reply_markup = kb.manage_order_keyboard(
         order_id=order_id,
         has_receipt=(order_info.receipt_file_id is not None),
@@ -89,20 +103,24 @@ async def send_order_details(message: Message, bot: Bot, session: AsyncSession, 
     await bot.send_message(message.chat.id, text, reply_markup=reply_markup)
 
 
+# --- Админ-панель и общие действия ---
+
 @router.callback_query(F.data == 'admin_panel')
 async def admin_panel(callback: CallbackQuery, state: FSMContext):
-    await state.clear()
+    """Отображает главную панель администратора."""
+    await state.clear()  # Сбрасываем FSM на всякий случай
     try:
         await callback.message.edit_text(
             LEXICON['admin_start_message'],
             reply_markup=kb.admin_panel_keyboard()
         )
     except TelegramBadRequest:
-        await callback.answer()
+        await callback.answer() # Если сообщение не изменилось
 
 
 @router.callback_query(CancelFSM.filter())
 async def cancel_fsm_action(callback: CallbackQuery, state: FSMContext):
+    """Отменяет любое FSM-состояние и возвращает в админ-панель."""
     await state.clear()
     try:
         await callback.message.edit_text(
@@ -110,6 +128,7 @@ async def cancel_fsm_action(callback: CallbackQuery, state: FSMContext):
             reply_markup=kb.admin_panel_keyboard()
         )
     except TelegramBadRequest:
+        # Если не удалось отредактировать (например, это было сообщение с фото)
         try:
             await callback.message.delete()
         except TelegramBadRequest:
@@ -121,8 +140,11 @@ async def cancel_fsm_action(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
 
 
+# --- Добавление товара (FSM) ---
+
 @router.callback_query(F.data == 'admin_add_product')
 async def add_product_start(callback: CallbackQuery, state: FSMContext):
+    """Начало процесса добавления товара. Запрос названия."""
     await state.set_state(AddProduct.name)
     try:
         await callback.message.edit_text(
@@ -135,6 +157,7 @@ async def add_product_start(callback: CallbackQuery, state: FSMContext):
 
 @router.message(AddProduct.name)
 async def add_product_name(message: Message, state: FSMContext):
+    """Обработка названия, запрос цены."""
     await state.update_data(name=message.text)
     await state.set_state(AddProduct.price)
     await message.answer(
@@ -145,6 +168,7 @@ async def add_product_name(message: Message, state: FSMContext):
 
 @router.message(AddProduct.price)
 async def add_product_price(message: Message, state: FSMContext):
+    """Обработка цены, запрос фото."""
     try:
         price = float(message.text)
         await state.update_data(price=price)
@@ -162,7 +186,8 @@ async def add_product_price(message: Message, state: FSMContext):
 
 @router.message(AddProduct.photo, F.photo)
 async def add_product_photo(message: Message, state: FSMContext, session: AsyncSession):
-    photo_id = message.photo[-1].file_id
+    """Обработка фото, запрос описания."""
+    photo_id = message.photo[-1].file_id  # Берем фото лучшего качества
     await state.update_data(photo_id=photo_id)
     await state.set_state(AddProduct.description)
     await message.answer(
@@ -173,8 +198,9 @@ async def add_product_photo(message: Message, state: FSMContext, session: AsyncS
 
 @router.message(AddProduct.description)
 async def add_product_description(message: Message, state: FSMContext, session: AsyncSession):
+    """Обработка описания и завершение добавления товара."""
     data = await state.get_data()
-    description = None if message.text == '-' else message.text
+    description = None if message.text == '-' else message.text  # Если введен дефис, описание будет пустым
 
     await rq.add_product(session, data['name'], data['price'], data['photo_id'], description)
     await state.clear()
@@ -185,8 +211,11 @@ async def add_product_description(message: Message, state: FSMContext, session: 
     )
 
 
+# --- Управление заказами ---
+
 @router.callback_query(F.data == 'admin_list_orders')
 async def list_orders(callback: CallbackQuery | Message, session: AsyncSession):
+    """Отображает список всех заказов для админа."""
     orders = await rq.get_all_orders(session)
     orders_list = orders.all()
 
@@ -214,7 +243,7 @@ async def list_orders(callback: CallbackQuery | Message, session: AsyncSession):
 async def view_order_detail(callback: CallbackQuery, callback_data: ViewOrder, session: AsyncSession, bot: Bot):
     """
     Обрабатывает нажатие на кнопку заказа из списка ИЛИ кнопку "назад к деталям".
-    Удаляет текущее сообщение и отправляет детали заново.
+    Использует сервисную функцию для отправки деталей.
     """
     await send_order_details(callback.message, bot, session, callback_data.order_id)
     await callback.answer()
@@ -222,6 +251,7 @@ async def view_order_detail(callback: CallbackQuery, callback_data: ViewOrder, s
 
 @router.callback_query(ViewReceipt.filter())
 async def view_receipt_handler(callback: CallbackQuery, callback_data: ViewReceipt, session: AsyncSession, bot: Bot):
+    """Отправляет админу файл с чеком."""
     order_info, _ = await rq.get_order_details(session, callback_data.order_id)
     if order_info and order_info.receipt_file_id:
         try:
@@ -237,7 +267,6 @@ async def view_receipt_handler(callback: CallbackQuery, callback_data: ViewRecei
     await callback.answer()
 
 
-# <-- НОВЫЙ ХЭНДЛЕР ДЛЯ ОТОБРАЖЕНИЯ КНОПОК СТАТУСОВ -->
 @router.callback_query(PromptStatus.filter())
 async def prompt_change_status(callback: CallbackQuery, callback_data: PromptStatus):
     """
@@ -252,10 +281,11 @@ async def prompt_change_status(callback: CallbackQuery, callback_data: PromptSta
     except TelegramBadRequest:
         pass
     await callback.answer()
-# ----------------------------------------------------
+
 
 @router.callback_query(ChangeStatus.filter(F.action == 'prompt_reason'))
 async def prompt_cancellation_reason(callback: CallbackQuery, callback_data: ChangeStatus, state: FSMContext):
+    """Запрашивает причину отмены заказа (начало FSM)."""
     order_id = callback_data.order_id
     await state.set_state(CancelOrder.waiting_for_reason)
     await state.update_data(order_id=order_id)
@@ -271,6 +301,7 @@ async def prompt_cancellation_reason(callback: CallbackQuery, callback_data: Cha
 
 @router.callback_query(ChangeStatus.filter(F.action == 'prompt_track_number'))
 async def prompt_cdek_track_number(callback: CallbackQuery, callback_data: ChangeStatus, state: FSMContext):
+    """Запрашивает трек-номер для отправленного заказа (начало FSM)."""
     order_id = callback_data.order_id
     await state.set_state(ShipOrder.waiting_for_track_number)
     await state.update_data(order_id=order_id)
@@ -285,6 +316,10 @@ async def prompt_cdek_track_number(callback: CallbackQuery, callback_data: Chang
 
 @router.callback_query(ChangeStatus.filter(F.action.is_(None)))
 async def change_order_status(callback: CallbackQuery, callback_data: ChangeStatus, session: AsyncSession, bot: Bot):
+    """
+    Изменяет статус заказа (для статусов, не требующих доп. ввода).
+    Например, 'В работе' или 'Завершен'.
+    """
     order_id = callback_data.order_id
     new_status = callback_data.new_status
 
@@ -292,6 +327,7 @@ async def change_order_status(callback: CallbackQuery, callback_data: ChangeStat
 
     order_info, _ = await rq.get_order_details(session, order_id)
 
+    # Определяем текст уведомления для пользователя
     notification_text = ""
     if new_status == 'processing':
         notification_text = LEXICON['user_order_processing_notification']
@@ -308,16 +344,16 @@ async def change_order_status(callback: CallbackQuery, callback_data: ChangeStat
 
     await callback.answer(LEXICON['admin_status_updated'])
     
-    # Возвращаемся к деталям заказа
+    # Возвращаемся к деталям заказа, чтобы показать обновленную информацию
     await send_order_details(callback.message, bot, session, order_id)
 
 
 @router.message(CancelOrder.waiting_for_reason, F.text)
 async def process_cancellation_reason(message: Message, state: FSMContext, session: AsyncSession, bot: Bot):
+    """Обрабатывает введенную причину отмены, меняет статус и уведомляет пользователя."""
     reason = message.text
     data = await state.get_data()
     order_id = data.get('order_id')
-
     await state.clear()
 
     if order_id:
@@ -336,15 +372,15 @@ async def process_cancellation_reason(message: Message, state: FSMContext, sessi
             logging.error(f"Не удалось отправить уведомление об отмене пользователю {order_info.tg_id}: {e}")
     
     await message.answer(LEXICON['admin_status_updated'])
-    await list_orders(message, session)
+    await list_orders(message, session)  # Возвращаемся к списку заказов
 
 
 @router.message(ShipOrder.waiting_for_track_number, F.text)
 async def process_cdek_track_number(message: Message, state: FSMContext, session: AsyncSession, bot: Bot):
+    """Обрабатывает введенный трек-номер, меняет статус и уведомляет пользователя."""
     track_number = message.text
     data = await state.get_data()
     order_id = data.get('order_id')
-
     await state.clear()
 
     if order_id:
@@ -366,12 +402,14 @@ async def process_cdek_track_number(message: Message, state: FSMContext, session
             logging.error(f"Не удалось отправить уведомление об отправке пользователю {order_info.tg_id}: {e}")
             
         await message.answer(LEXICON['admin_status_updated'])
-        
-        await send_order_details(message, bot, session, order_id)
+        await send_order_details(message, bot, session, order_id) # Возвращаемся к деталям заказа
 
+
+# --- Отчеты и статистика ---
 
 @router.callback_query(F.data == 'admin_report')
 async def download_report(callback: CallbackQuery, session: AsyncSession, bot: Bot):
+    """Генерирует и отправляет Excel-отчет по заказам."""
     try:
         await callback.message.edit_text(LEXICON['generating_report'])
     except TelegramBadRequest:
@@ -400,6 +438,7 @@ async def download_report(callback: CallbackQuery, session: AsyncSession, bot: B
         caption=LEXICON['report_ready']
     )
     
+    # Возвращаем админа в главное меню админки
     try:
         await callback.message.edit_text(
             LEXICON['admin_start_message'],
@@ -410,8 +449,28 @@ async def download_report(callback: CallbackQuery, session: AsyncSession, bot: B
     
     await callback.answer()
 
+@router.callback_query(F.data == 'admin_stats')
+async def get_statistics(callback: CallbackQuery, session: AsyncSession):
+    """Отображает статистику по магазину."""
+    stats = await rq.get_stats(session)
+    try:
+        await callback.message.edit_text(
+            text=LEXICON['stats_message'].format(**stats),
+            reply_markup=kb.admin_panel_keyboard()
+        )
+    except TelegramBadRequest as e:
+        if "message is not modified" in str(e):
+            await callback.answer()  # Просто закрываем "часики", если текст не изменился
+        else:
+            logging.error(f"Ошибка при обновлении статистики: {e}")
+            await callback.answer("Произошла ошибка при обновлении статистики.")
+
+
+# --- Управление товарами ---
+
 @router.callback_query(F.data == 'admin_manage_products')
 async def manage_products(callback: CallbackQuery, session: AsyncSession):
+    """Отображает список товаров для управления."""
     products = await rq.get_all_products(session)
     try:
         await callback.message.delete()
@@ -426,6 +485,7 @@ async def manage_products(callback: CallbackQuery, session: AsyncSession):
 
 @router.callback_query(ManageProduct.filter())
 async def manage_single_product(callback: CallbackQuery, callback_data: ManageProduct, session: AsyncSession):
+    """Показывает информацию о конкретном товаре и кнопки управления им."""
     product = await session.get(rq.Product, callback_data.product_id)
     if not product:
         await callback.answer("Товар не найден!", show_alert=True)
@@ -451,6 +511,7 @@ async def manage_single_product(callback: CallbackQuery, callback_data: ManagePr
 
 @router.callback_query(EditProduct.filter(F.action == 'choose'))
 async def choose_edit_action(callback: CallbackQuery, callback_data: EditProduct):
+    """Показывает клавиатуру для выбора поля для редактирования."""
     try:
         await callback.message.edit_caption(
             caption=LEXICON['choose_edit_action'],
@@ -462,6 +523,7 @@ async def choose_edit_action(callback: CallbackQuery, callback_data: EditProduct
 
 @router.callback_query(EditProduct.filter(F.action == 'price'))
 async def edit_product_price_start(callback: CallbackQuery, callback_data: EditProduct, state: FSMContext, session: AsyncSession):
+    """Начинает FSM для редактирования цены."""
     product = await session.get(rq.Product, callback_data.product_id)
     await state.set_state(EditProductState.waiting_for_new_price)
     await state.update_data(product_id=callback_data.product_id)
@@ -476,6 +538,7 @@ async def edit_product_price_start(callback: CallbackQuery, callback_data: EditP
 
 @router.message(EditProductState.waiting_for_new_price)
 async def process_new_price(message: Message, state: FSMContext, session: AsyncSession):
+    """Обрабатывает новую цену и обновляет ее в БД."""
     try:
         new_price = float(message.text)
         data = await state.get_data()
@@ -491,6 +554,7 @@ async def process_new_price(message: Message, state: FSMContext, session: AsyncS
 
 @router.callback_query(EditProduct.filter(F.action == 'name'))
 async def edit_product_name_start(callback: CallbackQuery, callback_data: EditProduct, state: FSMContext, session: AsyncSession):
+    """Начинает FSM для редактирования названия."""
     product = await session.get(rq.Product, callback_data.product_id)
     await state.set_state(EditProductState.waiting_for_new_name)
     await state.update_data(product_id=callback_data.product_id)
@@ -505,6 +569,7 @@ async def edit_product_name_start(callback: CallbackQuery, callback_data: EditPr
 
 @router.message(EditProductState.waiting_for_new_name)
 async def process_new_name(message: Message, state: FSMContext, session: AsyncSession):
+    """Обрабатывает новое название и обновляет его в БД."""
     new_name = message.text
     data = await state.get_data()
     await rq.update_product_name(session, data['product_id'], new_name)
@@ -514,6 +579,7 @@ async def process_new_name(message: Message, state: FSMContext, session: AsyncSe
 
 @router.callback_query(EditProduct.filter(F.action == 'description'))
 async def edit_product_description_start(callback: CallbackQuery, callback_data: EditProduct, state: FSMContext, session: AsyncSession):
+    """Начинает FSM для редактирования описания."""
     product = await session.get(rq.Product, callback_data.product_id)
     await state.set_state(EditProductState.waiting_for_new_description)
     await state.update_data(product_id=callback_data.product_id)
@@ -528,6 +594,7 @@ async def edit_product_description_start(callback: CallbackQuery, callback_data:
 
 @router.message(EditProductState.waiting_for_new_description)
 async def process_new_description(message: Message, state: FSMContext, session: AsyncSession):
+    """Обрабатывает новое описание и обновляет его в БД."""
     data = await state.get_data()
     product_id = data['product_id']
     new_description = None if message.text == '-' else message.text
@@ -540,6 +607,7 @@ async def process_new_description(message: Message, state: FSMContext, session: 
 
 @router.callback_query(DeleteProduct.filter(F.confirm == False))
 async def confirm_delete(callback: CallbackQuery, callback_data: DeleteProduct, session: AsyncSession):
+    """Запрашивает подтверждение на удаление товара."""
     product = await session.get(rq.Product, callback_data.product_id)
     try:
         await callback.message.edit_caption(
@@ -552,6 +620,7 @@ async def confirm_delete(callback: CallbackQuery, callback_data: DeleteProduct, 
 
 @router.callback_query(DeleteProduct.filter(F.confirm == True))
 async def process_delete(callback: CallbackQuery, callback_data: DeleteProduct, session: AsyncSession):
+    """Удаляет товар после подтверждения."""
     await rq.delete_product(session, callback_data.product_id)
     try:
         await callback.message.delete()
@@ -560,24 +629,11 @@ async def process_delete(callback: CallbackQuery, callback_data: DeleteProduct, 
     await callback.message.answer(LEXICON['product_deleted_message'], reply_markup=kb.admin_panel_keyboard())
 
 
-@router.callback_query(F.data == 'admin_stats')
-async def get_statistics(callback: CallbackQuery, session: AsyncSession):
-    stats = await rq.get_stats(session)
-    try:
-        await callback.message.edit_text(
-            text=LEXICON['stats_message'].format(**stats),
-            reply_markup=kb.admin_panel_keyboard()
-        )
-    except TelegramBadRequest as e:
-        if "message is not modified" in str(e):
-            await callback.answer() # Просто закрываем "часики"
-        else:
-            logging.error(f"Ошибка при обновлении статистики: {e}")
-            await callback.answer("Произошла ошибка при обновлении статистики.")
-
+# --- Рассылка ---
 
 @router.callback_query(F.data == 'admin_mailing')
 async def start_mailing(callback: CallbackQuery, state: FSMContext):
+    """Начинает FSM для создания рассылки."""
     await state.set_state(Mailing.waiting_for_text)
     try:
         await callback.message.edit_text(
@@ -590,6 +646,7 @@ async def start_mailing(callback: CallbackQuery, state: FSMContext):
 
 @router.message(Mailing.waiting_for_text, F.text)
 async def process_mailing_text(message: Message, state: FSMContext, session: AsyncSession, bot: Bot):
+    """Обрабатывает текст для рассылки и отправляет его всем пользователям."""
     await state.clear()
     await message.answer(LEXICON['mailing_started'])
 
@@ -599,7 +656,7 @@ async def process_mailing_text(message: Message, state: FSMContext, session: Asy
         try:
             await bot.send_message(chat_id=user_id, text=message.html_text)
             sent_count += 1
-            await asyncio.sleep(0.1) # Защита от rate-limit
+            await asyncio.sleep(0.1) # Небольшая задержка для защиты от лимитов Telegram
         except Exception as e:
             logging.error(f"Не удалось отправить сообщение пользователю {user_id}: {e}")
 
